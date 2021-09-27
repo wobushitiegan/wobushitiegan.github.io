@@ -103,5 +103,6 @@ theme: butterfly
 ## Docs: https://hexo.io/docs/one-command-deployment
 deploy:
   type: git
-  repo: https://github.com/wobushitiegan/wobushitiegan.github.io # https://github.com/TJ-XiaJiaHao/TJ-XiaJiaHao.github.io
-  branch: master
+  repo: 
+    github: https://github.com/wobushitiegan/wobushitiegan.github.io.git,master # https://github.com/TJ-XiaJiaHao/TJ-XiaJiaHao.github.io
+    # coding: https://e.coding.net/erwa/erwa/wobushitiegan.git,master #不往coding上推了

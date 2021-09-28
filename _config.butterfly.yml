@@ -106,3 +106,9 @@ deploy:
   repo: 
     github: https://github.com/wobushitiegan/wobushitiegan.github.io.git,master # https://github.com/TJ-XiaJiaHao/TJ-XiaJiaHao.github.io
     coding: https://e.coding.net/erwa/erwa/wobushitiegan.git,master #不往coding上推了
+
+# A simple 404 page
+error_404:
+  enable: true
+  subtitle: "页面没有找到"
+  background: 

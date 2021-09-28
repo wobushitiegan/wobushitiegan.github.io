@@ -1,4 +1,8 @@
-#  Databricks
+title: Databricks
+
+---
+
+
 
 直接上官方文档： [Azure Databricks 文档 | Microsoft Docs](https://docs.microsoft.com/zh-cn/azure/databricks/)
 
@@ -30,11 +34,9 @@
 
 
 
-##  一、Delta Lake 快速入门 
+## 一、Delta Lake 快速入门 
 
-本快速入门展示了如何生成将 JSON 数据读取到 Delta 表中的管道，以及如何修改表、读取表、显示表历史记录和优化表。
-
-### 1、创建表
+### **1、创建表**
 
 > 若要创建 Delta 表，可以使用现有的 Apache Spark SQL 代码，并将格式从 `parquet`、`csv`、`json` 等更改为 `delta`。
 >

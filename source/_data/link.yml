@@ -1,15 +1,23 @@
-- class_name: '<i class="fas fa-check-double" style="color: #FF6666;padding-right: 0.4rem"></i>技术社区'
-  class_desc: '<span style="font-style: italic;">关注技术, 通过技术实现快捷生活！</span>'
+- class_name: 友情链接
+  class_desc: 那些人，那些事
   link_list:
-    - name: CSDN
-      link: https://blog.csdn.net/yk_ddm
-      avatar: https://gitee.com/yk-ddm/picx_drawing_bed/raw/master/images/20210917170110.png
-      descr: 少想，多做！
-    - name: nowcoder
-      link: https://blog.nowcoder.net/helloworldyk
-      avatar: https://gitee.com/yk-ddm/picx_drawing_bed/raw/master/images/20210917170358.png
-      descr: 极客者！
-    - name: gitee
-      link: https://gitee.com/yk-ddm
-      avatar: https://gitee.com/yk-ddm/picx_drawing_bed/raw/master/images/20210917170554.png
-      descr: 学习是一辈子的事, 人外有人，天外有天, 比你厉害的人多得去了，你得加把力了~
+    - name: dawabigbaby
+      link: https://dawabigbaby.github.io/
+      avatar: https://d33wubrfki0l68.cloudfront.net/6657ba50e702d84afb32fe846bed54fba1a77add/827ae/logo.svg
+      descr: 快速、简单且强大的网誌框架
+
+- class_name: 网站
+  class_desc: 值得推荐的网站
+  link_list:
+    - name: Youtube
+      link: https://www.youtube.com/
+      avatar: https://i.loli.net/2020/05/14/9ZkGg8v3azHJfM1.png
+      descr: 视频网站
+    - name: Weibo
+      link: https://www.weibo.com/
+      avatar: https://i.loli.net/2020/05/14/TLJBum386vcnI1P.png
+      descr: 中国最大社交分享平台
+    - name: Twitter
+      link: https://twitter.com/
+      avatar: https://i.loli.net/2020/05/14/5VyHPQqR6LWF39a.png
+      descr: 社交分享平台

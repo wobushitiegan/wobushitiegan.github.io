@@ -1,0 +1,15 @@
+- class_name: '<i class="fas fa-check-double" style="color: #FF6666;padding-right: 0.4rem"></i>技术社区'
+  class_desc: '<span style="font-style: italic;">关注技术, 通过技术实现快捷生活！</span>'
+  link_list:
+    - name: CSDN
+      link: https://blog.csdn.net/yk_ddm
+      avatar: https://gitee.com/yk-ddm/picx_drawing_bed/raw/master/images/20210917170110.png
+      descr: 少想，多做！
+    - name: nowcoder
+      link: https://blog.nowcoder.net/helloworldyk
+      avatar: https://gitee.com/yk-ddm/picx_drawing_bed/raw/master/images/20210917170358.png
+      descr: 极客者！
+    - name: gitee
+      link: https://gitee.com/yk-ddm
+      avatar: https://gitee.com/yk-ddm/picx_drawing_bed/raw/master/images/20210917170554.png
+      descr: 学习是一辈子的事, 人外有人，天外有天, 比你厉害的人多得去了，你得加把力了~

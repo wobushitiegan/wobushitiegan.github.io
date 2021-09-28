@@ -1,0 +1,7 @@
+bottom:
+    - class_name: personal-wechat
+      id_name: personal-wechat
+      name: 个人微信
+      icon: iconfont icon-weixin
+      order:
+      html: <img width=230 height=230 src="https://gitee.com/yk-ddm/picx_drawing_bed/raw/master/images/20210913164309.png" alt="personal-wechat" />

@@ -1,5 +1,7 @@
 ---
-title: 解决Typroa图片上传问题
+title: 解决Typroa图片上传问题 
+tag: spark
+categories: 问题解决  
 ---
 
 > 本文使用gitee+PicGo+Typora的方法来解决图床问题，免费快捷

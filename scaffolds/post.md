@@ -1,12 +1,12 @@
 ---
-title:
-date:
-updated:
-tags:
+title: #标题，必须得有
+date:  
+updated: 
+tags:   #标签
 categories:
 keywords:
 description:
-top_img:
+top_img: #顶部图片
 comments:
 cover:
 toc:

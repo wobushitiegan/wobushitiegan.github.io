@@ -1,5 +1,7 @@
+---
 title : hexo错误集锦
-
+tag : hexo
+categories: 网站
 ---
 
 > butterfly 主题的官方文档，有问题先去这查。https://butterfly.js.org/
@@ -20,7 +22,7 @@ title : hexo错误集锦
 
 > - 错误场景：  hexo d,  部署了之后，网站就进不去了
 > - 错误原因： 检查github的page，看域名解析是否还在，我这边是因为没有了，重新配置上就好了。
-> - 解决方案：重新配置一下域名解析。（ps,我得找到根本原因，应该可以自动配置）
+> - 解决方案：重新检查配置一下域名解析。在项目根目录resource文件夹下添加CNAME文件。这样会自动生成时就上传到对应的master分支，GitHub就可以自动检测到域名解析并且自动配置了
 
 ![image-20210928200914375](https://tva1.sinaimg.cn/large/008i3skNgy1guwlmvksgwj61xs0u0te802.jpg)
 
@@ -34,22 +36,15 @@ title : hexo错误集锦
 
 
 
+## 4、配置百度网站统计时报错
+
+![image-20210929220215759](https://tva1.sinaimg.cn/large/008i3skNgy1guxuitbtnbj61pp0u0dni02.jpg)
+
+> - 错误场景：  配置百度网站统计时报错
+> - 错误原因： 
+> - 解决方案：暂未解决
 
 
 
 
 
-
-bottom:
-
-​    \- class_name: personal-wechat
-
-​      id_name: personal-wechat
-
-​      name: 个人微信
-
-​      icon: iconfont icon-weixin
-
-​      order:
-
-​      html: <img width=230 height=230 src="https://tva1.sinaimg.cn/large/008i3skNgy1guwqa94ridj60rs0rq42702.jpg" alt="personal-wechat" />

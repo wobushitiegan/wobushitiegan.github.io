@@ -545,7 +545,7 @@ spark.readStream.format("delta")
 
 你也可以使用结构化流式处理将数据写入 Delta 表。 即使有针对表并行运行的其他流或批处理查询，Delta Lake 也可通过事务日志确保“仅一次”处理。
 
-##### 3.2.1、 追加模式
+##### 3.2.1、追加模式
 
 > 默认情况下，流在追加模式下运行，这会将新记录添加到表中。
 
@@ -872,19 +872,603 @@ DeltaTable.forPath(spark, "/data/events/")
 
 使用 merge 和 foreachBatch 笔记本在更新模式下写入流式处理聚合(demo) [获取笔记本](https://docs.microsoft.com/zh-cn/azure/databricks/_static/notebooks/merge-in-streaming.html)
 
+### 5、更改数据馈送
+
+> 备注：可在 Databricks Runtime 8.4 及更高版本中使用。
+>
+> 增量更改数据馈送表示 Delta 表的不同版本之间的行级别更改。 对 Delta 表启用此功能后，运行时会记录写入该表的所有数据的“更改事件”。 这包括行数据以及指示已插入、已删除还是已更新指定行的元数据。
+>
+> 可在批处理查询中使用 SQL 和 DataFrame API（即 `df.read`）读取更改事件，并且可在流式处理查询中使用 DataFrame API（即 `df.readStream`）读取更改事件。
+
+#### 5.1、用例
+
+> 默认情况下，不启用增量更改数据馈送。 启用更改数据馈送有助于实现以下用例。
+>
+> - **银色和金色表**：仅通过处理初始执行 `MERGE`、`UPDATE` 或 `DELETE` 操作后发生的行级别更改来加速和简化 ETL 和 ELT 操作，从而提高 Delta 性能。
+> - **具体化视图**：创建最新的聚合信息视图，以在 BI 和分析中使用，无需重新处理整个基础表，而是仅在发生更改时更新。
+> - **传输更改**：将更改数据馈送发送至下游系统（如 Kafka 或 RDBMS），这些系统可使用它在数据管道后期阶段以增量方式进行处理。
+> - 审核线索表：捕获更改数据馈送作为 Delta 表可提供永久存储和高效的查询功能，用于查看一段时间的所有更改，包括何时发生删除和进行了哪些更新。
+
+### 5.2、启用更改数据馈送
+
+- **重要提示**
+
+> - 为表启用更改数据馈送选项后，无法再使用 Databricks Runtime 8.1 或更低版本写入该表。 始终可以读取该表。
+> - 仅记录启用更改数据馈送后所做的更改；不会捕获之前对表所做的更改。
+>
+> 必须使用以下方法显式启用更改数据馈送选项
+
+**新表**：在 `CREATE TABLE` 命令中设置表属性 `delta.enableChangeDataFeed = true`。
+
+```sql
+CREATE TABLE student (id INT, name STRING, age INT) TBLPROPERTIES (delta.enableChangeDataFeed = true)
+```
+
+**现有表**：在 `ALTER TABLE` 命令中设置表属性 `delta.enableChangeDataFeed = true`。
+
+```sql
+ALTER TABLE myDeltaTable SET TBLPROPERTIES (delta.enableChangeDataFeed = true)
+```
+
+**所有新表**：
+
+```sql
+set spark.databricks.delta.properties.defaults.enableChangeDataFeed = true;
+```
+
+- 更改数据存储位置：
+
+> Azure Databricks 将 `UPDATE`、`DELETE` 和 `MERGE` 操作的更改数据记录在 Delta 表目录的 `_change_data` 文件夹下。 当 Azure Databricks 检测到它可以直接从事务日志计算更改数据馈送时，可能会跳过这些记录。 具体而言，仅插入操作和完整分区删除操作不会在 `_change_data` 目录中生成数据。
+>
+> `_change_data` 文件夹中的文件遵循表的保留策略。 因此，如果运行 [VACUUM](https://docs.microsoft.com/zh-cn/azure/databricks/delta/delta-utility#delta-vacuum) 命令，也会删除更改数据馈送数据。
+
+### 5.3、在批处理查询中读取更改
+
+> 可在开始和结束时提供版本或时间戳。 开始和结束版本以及时间戳包含在查询中。 若要读取从表的特定开始版本到最新版本的更改，仅指定起始版本或时间戳。
+>
+> 将版本指定为整数，将时间戳指定为字符串，格式为 `yyyyMMddHHmmssSSS`。
+>
+> 如果提供的版本较低或提供的时间戳早于已记录更改事件的时间戳，那么启用更改数据馈送时，会引发错误，指示未启用更改数据馈送。
+
+``` SQL 
+SQL: 
+-- version as ints or longs e.g. changes from version 0 to 10
+SELECT * FROM table_changes('tableName', 0, 10)
+
+-- timestamp as string formatted timestamps
+SELECT * FROM table_changes('tableName', '2021-04-21 05:45:46', '2021-05-21 12:00:00')
+
+-- providing only the startingVersion/timestamp
+SELECT * FROM table_changes('tableName', 0)
+
+-- database/schema names inside the string for table name, with backticks for escaping dots and special characters
+SELECT * FROM table_changes('dbName.`dotted.tableName`', '2021-04-21 06:45:46' , '2021-05-21 12:00:00')
+
+-- path based tables
+SELECT * FROM table_changes_by_path('\path', '2021-04-21 05:45:46')
+
+--------------------------------------------------------------------------------------------------------------
+Spark:
+// version as ints or longs
+spark.read.format("delta")
+  .option("readChangeFeed", "true")
+  .option("startingVersion", 0)
+  .option("endingVersion", 10)
+  .table("myDeltaTable")
+
+// timestamps as formatted timestamp
+spark.read.format("delta")
+  .option("readChangeFeed", "true")
+  .option("startingTimestamp", "2021-04-21 05:45:46")
+  .option("endingTimestamp", "2021-05-21 12:00:00")
+  .table("myDeltaTable")
+
+// providing only the startingVersion/timestamp
+spark.read.format("delta")
+  .option("readChangeFeed", "true")
+  .option("startingVersion", 0)
+  .table("myDeltaTable")
+
+// path based tables
+spark.read.format("delta")
+  .option("readChangeFeed", "true")
+  .option("startingTimestamp", "2021-04-21 05:45:46")
+  .load("pathToMyDeltaTable")
+```
+
+### 5.4、在流式处理查询中读取更改
+
+> 若要在读取表的同时获取更改数据，请将选项 `readChangeFeed` 设置为 `true`。 `startingVersion` 或 `startingTimestamp` 是可选项，如果未提供，则流会在流式传输时将表的最新快照返回为 `INSERT`，并将未来的更改返回为更改数据。 读取更改数据时还支持速率限制（`maxFilesPerTrigger`、`maxBytesPerTrigger`）和 `excludeRegex` 等选项。
+
+``` scala 
+// providing a starting version
+spark.readStream.format("delta")
+  .option("readChangeFeed", "true")
+  .option("startingVersion", 0)
+  .table("myDeltaTable")
+
+// providing a starting timestamp
+spark.readStream.format("delta")
+  .option("readChangeFeed", "true")
+  .option("startingVersion", "2021-04-21 05:35:43")
+  .load("/pathToMyDeltaTable")
+
+// not providing a starting version/timestamp will result in the latest snapshot being fetched first
+spark.readStream.format("delta")
+  .option("readChangeFeed", "true")
+  .table("myDeltaTable")
+```
+
+### 5.5、 ChangeData Demo 
+
+[获取笔记本](https://docs.microsoft.com/zh-cn/azure/databricks/_static/notebooks/delta/cdf-demo.html)
+
+### 6、表实用工具命令
+
+这里的官方文档就不往这里复制了，直接贴原文连接
+
+> [表实用工具命令 - Azure Databricks - Workspace | Microsoft Docs](https://docs.microsoft.com/zh-cn/azure/databricks/delta/delta-utility)
+>
+> - [删除 Delta 表不再引用的文件](https://docs.microsoft.com/zh-cn/azure/databricks/delta/delta-utility#remove-files-no-longer-referenced-by-a-delta-table)
+> - [检索 Delta 表历史记录](https://docs.microsoft.com/zh-cn/azure/databricks/delta/delta-utility#retrieve-delta-table-history)
+> - [检索 Delta 表详细信息](https://docs.microsoft.com/zh-cn/azure/databricks/delta/delta-utility#retrieve-delta-table-details)
+> - [将 Parquet 表转换为 Delta 表](https://docs.microsoft.com/zh-cn/azure/databricks/delta/delta-utility#convert-a-parquet-table-to-a-delta-table)
+> - [将 Delta 表转换为 Parquet 表](https://docs.microsoft.com/zh-cn/azure/databricks/delta/delta-utility#convert-a-delta-table-to-a-parquet-table)
+> - [将 Delta 表还原到早期状态](https://docs.microsoft.com/zh-cn/azure/databricks/delta/delta-utility#restore-a-delta-table-to-an-earlier-state)
+> - [克隆 Delta 表](https://docs.microsoft.com/zh-cn/azure/databricks/delta/delta-utility#clone-a-delta-table)
+
+### 7、并发控制
+
+> [并发控制 - Azure Databricks - Workspace | Microsoft Docs](https://docs.microsoft.com/zh-cn/azure/databricks/delta/concurrency-control)
+
+### 8、使用Delta Lake时的最佳做法
+
+**提供数据位置提示**
+
+如果希望在查询谓词中常规使用某一列，并且该列具有较高的基数（即包含多个非重复值），则使用 `Z-ORDER BY`。 Delta Lake 根据列值自动在文件中布局数据，在查询时根据布局信息跳过不相关的数据。
+
+有关详细信息，请参阅 [Z 排序（多维聚类）](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#delta-zorder)。
 
 
 
+**选择正确的分区列**
+
+可以按列对 Delta 表进行分区。 最常使用的分区列是 `date`。 请按照以下两个经验法则来确定要根据哪个列进行分区：
+
+1、如果某个列的基数将会很高，则不要将该列用于分区。 例如，如果你按列 `userId` 进行分区并且可能有 100 万个不同的用户 ID，则这是一种错误的分区策略。
+
+2、每个分区中的数据量：如果你预计该分区中的数据至少有 1 GB，可以按列进行分区。
+
+压缩文件
+
+如果你连续将数据写入到 Delta 表，则它会随着时间的推移累积大量文件，尤其是小批量添加数据时。 这可能会对表读取效率产生不利影响，并且还会影响文件系统的性能。 理想情况下，应当将大量小文件定期重写到较小数量的较大型文件中。 这称为压缩。
+
+你可以使用 [OPTIMIZE](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#delta-optimize) 命令来压缩表。
 
 
 
+**替换表的内容或架构**
+
+有时候，你可能希望替换 Delta 表。 例如： 。
+
+- 你发现表中的数据不正确，需要对内容进行替换。
+- 你希望重写整个表，以执行不兼容架构更改（删除列或更改列类型）。
+
+尽管可以删除 Delta 表的整个目录并在同一路径上创建新表，但不建议这样做，因为：
+
+- 删除目录效率不高。 删除某个包含极大文件的目录可能需要数小时甚至数天的时间。
+- 删除的文件中的所有内容都会丢失；如果删除了错误的表，则很难恢复。
+- 目录删除不是原子操作。 删除表时，某个读取表的并发查询可能会失败或看到的是部分表。
+
+如果不需要更改表架构，则可以从 Delta 表中[删除](https://docs.microsoft.com/zh-cn/azure/databricks/delta/delta-update#delete-from-a-table)数据并插入新数据，或者通过[更新](https://docs.microsoft.com/zh-cn/azure/databricks/delta/delta-update#update-a-table)表来纠正不正确的值。
+
+如果要更改表架构，则能够以原子方式替换整个表。 例如： 。
+
+```SQL
+SQL :
+REPLACE TABLE <your-table> USING DELTA PARTITIONED BY (<your-partition-columns>) AS SELECT ... -- Managed table
+REPLACE TABLE <your-table> USING DELTA PARTITIONED BY (<your-partition-columns>) LOCATION "<your-table-path>" AS SELECT ... -- External table
+---------------------------------------------------------------------------
+Scala: 
+dataframe.write
+  .format("delta")
+  .mode("overwrite")
+  .option("overwriteSchema", "true")
+  .partitionBy(<your-partition-columns>)
+  .saveAsTable("<your-table>") // Managed table
+dataframe.write
+  .format("delta")
+  .mode("overwrite")
+  .option("overwriteSchema", "true")
+  .option("path", "<your-table-path>")
+  .partitionBy(<your-partition-columns>)
+  .saveAsTable("<your-table>") // External table
+```
+
+此方法有多个优点：
+
+- 覆盖表的速度要快得多，因为它不需要以递归方式列出目录或删除任何文件。
+- 表的旧版本仍然存在。 如果删除了错误的表，则可以使用[按时间顺序查看](https://docs.microsoft.com/zh-cn/azure/databricks/delta/delta-batch#query-an-older-snapshot-of-a-table-time-travel)轻松检索旧数据。
+- 这是一个原子操作。 在删除表时，并发查询仍然可以读取表。
+- 由于 Delta Lake ACID 事务保证，如果覆盖表失败，则该表将处于其以前的状态。
+
+此外，如果你想要在覆盖表后删除旧文件以节省存储成本，则可以使用 [VACUUM](https://docs.microsoft.com/zh-cn/azure/databricks/delta/delta-utility#delta-vacuum) 来删除它们。 它针对文件删除进行了优化，通常比删除整个目录要快。
 
 
 
+**Spark 缓存**
+
+Databricks 建议使用 [Spark 缓存](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/delta-cache#delta-and-rdd-cache-comparison)，如下所示
+
+```python
+df = spark.read.delta("/some/path")
+df .cache()
+```
+
+仅适用于将多次使用一些消耗大量资源的聚合或联接结果（例如执行更多汇总）的情况。
+
+否则，请不要对 Delta 表使用此方法。
+
+- 丢失的任何数据跳过都可能归因于在缓存的 `DataFrame` 顶部添加的其他筛选器。
+- 如果使用其他标识符访问表，则可能不会更新缓存的数据（例如，你执行 `spark.table(x).cache()`，但随后使用 `spark.write.save(/some/path)` 写入表）。
 
 
 
+## 三、Delta Engine
 
+>  Delta Engine 是与 Apache Spark 兼容的高性能查询引擎，提供了一种高效的方式来处理数据湖中的数据，包括存储在开源 Delta Lake 中的数据。 Delta Engine 优化可加快数据湖操作速度，并支持各种工作负载，从大规模 ETL 处理到临时交互式查询均可。 其中许多优化都自动进行；只需要通过将 Azure Databricks 用于数据湖即可获得这些 Delta Engine 功能的优势。
+
+- 通过文件管理优化性能
+  - [压缩（二进制打包）](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#compaction-bin-packing)
+  - [跳过数据](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#data-skipping)
+  - [Z 顺序（多维聚类）](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#z-ordering-multi-dimensional-clustering)
+  - [调整文件大小](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#tune-file-size)
+  - [Notebook](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#notebooks)
+  - [提高交互式查询性能](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#improve-interactive-query-performance)
+  - [常见问题解答 (FAQ)](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#frequently-asked-questions-faq)
+- 自动优化
+  - [自动优化的工作原理](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/auto-optimize#how-auto-optimize-works)
+  - [启用自动优化](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/auto-optimize#enable-auto-optimize)
+  - [何时选择加入和选择退出](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/auto-optimize#when-to-opt-in-and-opt-out)
+  - [示例工作流：使用并发删除或更新操作进行流式引入](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/auto-optimize#example-workflow-streaming-ingest-with-concurrent-deletes-or-updates)
+  - [常见问题解答 (FAQ)](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/auto-optimize#frequently-asked-questions-faq)
+- 通过缓存优化性能
+  - [增量缓存和 Apache Spark 缓存](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/delta-cache#delta-and-apache-spark-caching)
+  - [增量缓存一致性](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/delta-cache#delta-cache-consistency)
+  - [使用增量缓存](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/delta-cache#use-delta-caching)
+  - [缓存一部分数据](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/delta-cache#cache-a-subset-of-the-data)
+  - [监视增量缓存](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/delta-cache#monitor-the-delta-cache)
+  - [配置增量缓存](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/delta-cache#configure-the-delta-cache)
+- [动态文件修剪](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/dynamic-file-pruning)
+- 隔离级别
+  - [设置隔离级别](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/isolation-level#set-the-isolation-level)
+- Bloom 筛选器索引
+  - [配置](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/bloom-filters#configuration)
+  - [创建 Bloom 筛选器索引](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/bloom-filters#create-a-bloom-filter-index)
+  - [删除 Bloom 筛选器索引](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/bloom-filters#drop-a-bloom-filter-index)
+  - [显示 Bloom 筛选器索引的列表](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/bloom-filters#display-the-list-of-bloom-filter-indexes)
+  - [笔记本](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/bloom-filters#notebook)
+- 优化联接性能
+  - [范围联接优化](https://docs.microsoft.com/zh-cn/azure/databricks/delta/join-performance/range-join)
+  - [倾斜联接优化](https://docs.microsoft.com/zh-cn/azure/databricks/delta/join-performance/skew-join)
+- 优化的数据转换
+  - [高阶函数](https://docs.microsoft.com/zh-cn/azure/databricks/delta/data-transformation/higher-order-lambda-functions)
+  - [转换复杂数据类型](https://docs.microsoft.com/zh-cn/azure/databricks/delta/data-transformation/complex-types)
+
+### 1、通过文件管理优化性能
+
+> 为提高查询速度，Azure Databricks 上的 Delta Lake 支持优化存储在云存储中的数据的布局。 Azure Databricks 上的 Delta Lake 支持两种布局算法：二进制打包和 Z 排序。
+>
+> 本文介绍如何运行优化命令、两种布局算法的工作原理以及如何清理过时的表快照。
+>
+> - [常见问题解答](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#optimize-faq)阐释了为什么优化不是自动进行的，并提供了有关运行优化命令的频率的建议。
+> - 有关演示优化优点的笔记本，请参阅[优化示例](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/optimization-examples)。
+
+#### 1.1、压缩（二进制打包）
+
+> Azure Databricks 上的 Delta Lake 可以将小文件合并为较大的文件，从而提高表中读取查询的速度。 通过运行 `OPTIMIZE` 命令触发压缩：
+>
+> ```SQL 
+> OPTIMIZE delta.`/data/events`
+> 或
+> OPTIMIZE events
+> 
+> 如果拥有大量数据，并且只想要优化其中的一个子集，则可以使用 WHERE 指定一个可选的分区谓词：
+> OPTIMIZE events WHERE date >= '2017-01-01'
+> ```
+
+#### 1.2、跳过数据
+
+> 向 Delta 表中写入数据时，会自动收集跳过数据信息。 Azure Databricks 上的 Delta Lake 会在查询时利用此信息（最小值和最大值）来提供更快的查询。 不需要配置跳过的数据；此功能会在适用时激活。 但其有效性取决于数据的布局。 为了获取最佳结果，请应用 [Z 排序](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#delta-zorder)。
+>
+> 详细了解 Azure Databricks 上的 Delta Lake 跳过数据和 Z 排序的优点，请参阅[优化示例](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/optimization-examples)中的笔记本。 默认情况下，Azure Databricks 上的 Delta Lake 收集你的表架构中定义的前 32 列的统计信息。 你可以使用[表属性](https://docs.microsoft.com/zh-cn/azure/databricks/delta/delta-batch#table-properties) `dataSkippingNumIndexedCols` 来更改此值。 在写入文件时，添加更多的列来收集统计信息会增加额外的开销。
+>
+> 为了收集统计信息，嵌套列中的每个字段都被视为单独的列。
+>
+> 有关详细信息，请参阅博客文章：[通过 Databricks Delta 以在数秒内处理数 PB 的数据](https://databricks.com/blog/2018/07/31/processing-petabytes-of-data-in-seconds-with-databricks-delta.html)。
+
+#### 1.3、Z排序（多位聚类）
+
+> Z 排序是并置同一组文件中相关信息的[方法](https://en.wikipedia.org/wiki/Z-order_curve)。 Azure Databricks 上的 Delta Lake 数据跳过算法会自动使用此并置，大幅减少需要读取的数据量。 对于 Z 排序数据，请在 `ZORDER BY` 子句中指定要排序的列：
+>
+> ```sql
+> OPTIMIZE events
+> WHERE date >= current_timestamp() - INTERVAL 1 day
+> ZORDER BY (eventType)
+> ```
+>
+> 如果希望在查询谓词中常规使用某一列，并且该列具有较高的基数（即包含多个非重复值），请使用 `ZORDER BY`。
+>
+> 可以将 `ZORDER BY` 的多个列指定为以逗号分隔的列表。 但是，区域的有效性会随每个附加列一起删除。 Z 排序对于未收集统计信息的列无效并且会浪费资源，因为需要列本地统计信息（如最小值、最大值和总计）才能跳过数据。 可以通过对架构中的列重新排序或增加从中收集统计信息的列数，对某些列配置统计信息收集。 （有关详细信息，请参阅[跳过数据](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#delta-data-skipping)部分）。
+>
+>  备注
+>
+> - Z 排序不是幂等的，而应该是增量操作。 多次运行不能保证 Z 排序所需的时间减少。 但是，如果没有将新数据添加到刚刚进行 Z 排序的分区，则该分区的另一个 Z 排序将不会产生任何效果。
+>
+> - Z 排序旨在根据元组的数量生成均匀平衡的数据文件，但不一定是磁盘上的数据大小。 这两个度量值通常是相关的，但可能会有例外的情况，导致优化任务时间出现偏差。
+>
+>   例如，如果 `ZORDER BY` 日期，并且最新记录的宽度比过去多很多（例如数组或字符串值较长），则 `OPTIMIZE` 作业的任务持续时间和所生成文件的大小都会出现偏差。 但这只是 `OPTIMIZE` 命令本身的问题；它不应对后续查询产生任何负面影响。
+
+#### 1.4、调整文件大小
+
+> 本部分介绍了如何调整 Delta 表中文件的大小。
+>
+> - [设置目标大小](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#set-a-target-size)
+> - [基于工作负荷自动调整](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#autotune-based-on-workload)
+> - [基于表大小自动调整](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#autotune-based-on-table-size)
+
+Databricks 上的 Delta Lake 优化 Scala 笔记本  [获取笔记本](https://docs.microsoft.com/zh-cn/azure/databricks/_static/notebooks/delta/optimize-scala.html)
+
+Databricks 上的 Delta Lake 优化 SQL 笔记本  [获取笔记本](https://docs.microsoft.com/zh-cn/azure/databricks/_static/notebooks/delta/optimize-sql.html)
+
+#### 1.5、 提高交互式查询性能
+
+> Delta Engine 提供了一些额外的机制来提高查询性能。
+>
+> - [管理数据时效性](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#manage-data-recency)
+> - [用于低延迟查询的增强检查点](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#enhanced-checkpoints-for-low-latency-queries)
+>
+> Delta Lake 不会执行昂贵的 JSON 分析来获取列级统计信息。
+>
+> Parquet 列修剪功能可以显著减少读取列的统计信息所需的 I/O。
+>
+> 结构格式启用一系列优化，这些优化可以将增量 Delta Lake 读取操作的开销从数秒降低到数十毫秒，大大降低短查询的延迟。
+
+
+
+### 2、自动优化
+
+> 自动优化是一组可选功能，可在向 Delta 表进行各次写入时自动压缩小文件。 在写入过程中支付少量的开销可以为进行频繁查询的表带来显著的好处。 自动优化在下列情况下尤其有用：
+>
+> - 可以接受分钟级延迟的流式处理用例
+> - `MERGE INTO` 是写入到 Delta Lake 的首选方法
+> - `CREATE TABLE AS SELECT` 或 `INSERT INTO` 是常用操作
+
+#### 2.1、自动优化的工作原理
+
+> 自动优化包括两个互补功能：优化写入和自动压缩。
+
+- 优化写入如何工作：Azure Databricks 基于实际数据动态优化 Apache Spark 分区大小，并尝试为每个表分区写出 128 MB 的文件。 这是一个近似大小，可能因数据集特征而异。
+- 自动压缩如何工作：在每次写入后，Azure Databricks 会检查文件是否可以进一步压缩，并运行一个 OPTIMIZE 作业（128 MB 文件大小，而不是标准 OPTIMIZE 中使用的 1 GB 文件大小），以便进一步压缩包含最多小文件的分区的文件。
+
+![优化写入](https://docs.microsoft.com/zh-cn/azure/databricks/_static/images/delta/optimized-writes.png)
+
+#### 2.2、启用自动优化
+
+> 必须使用以下方法之一显式启用优化写入和自动压缩：
+>
+> - **新表**：在 `delta.autoOptimize.autoCompact = true` 命令中设置表属性 `delta.autoOptimize.optimizeWrite = true` 和 `CREATE TABLE`。
+>
+>   ```sql
+>   CREATE TABLE student (id INT, name STRING, age INT) TBLPROPERTIES (delta.autoOptimize.optimizeWrite = true, delta.autoOptimize.autoCompact = true)
+>   ```
+>
+> - **现有表**：在 `delta.autoOptimize.autoCompact = true` 命令中设置表属性 `delta.autoOptimize.optimizeWrite = true` 和 `ALTER TABLE`。
+>
+>   ```sql
+>   ALTER TABLE [table_name | delta.`<table-path>`] SET TBLPROPERTIES (delta.autoOptimize.optimizeWrite = true, delta.autoOptimize.autoCompact = true)
+>   ```
+>
+> - **所有新表**：
+>
+>   ```sql
+>   set spark.databricks.delta.properties.defaults.autoOptimize.optimizeWrite = true;
+>   set spark.databricks.delta.properties.defaults.autoOptimize.autoCompact = true;
+>   ```
+>
+> 此外，可以使用以下配置为 Spark 会话启用和禁用这两项功能：
+>
+> - `spark.databricks.delta.optimizeWrite.enabled`
+> - `spark.databricks.delta.autoCompact.enabled`
+>
+> 会话配置优先于表属性，因此你可以更好地控制何时选择加入或选择退出这些功能。
+
+#### 2.3、合适选择加入和选择退出
+
+本部分提供了有关何时选择加入和选择退出自动优化功能的指导。
+
+##### 2.3.1、何时选择加入优化写入
+
+优化写入旨在最大程度地提高写入到存储服务的数据的吞吐量。 这可以通过减少写入的文件数来实现，而不会牺牲过多的并行度。
+
+优化写入需要根据目标表的分区结构来混排数据。 这种混排自然会产生额外成本。 但是，写入过程中的吞吐量增加可能会对冲掉混排成本。 如果没有，查询数据时吞吐量会增加，因此这个功能仍然是很有价值的。
+
+优化写入的关键在于它是一个自适应的混排。 如果你有一个流式处理引入用例，并且输入数据速率随时间推移而变化，则自适应混排会根据不同微批次的传入数据速率自行进行相应调整。 如果代码片段在写出流之前执行 `coalesce(n)` 或 `repartition(n)`，则可以删除这些行。
+
+**何时选择加入**
+
+- 可以接受分钟级延迟的流式处理用例
+- 使用 `MERGE`、`UPDATE`、`DELETE`、`INSERT INTO`、`CREATE TABLE AS SELECT` 之类的 SQL 命令时
+
+**何时选择退出**
+
+当写入的数据以兆字节为数量级且存储优化实例不可用时。
+
+##### 2.3.2、何时选择加入自动压缩
+
+自动压缩发生在向表进行写入的操作成功后，在执行了写入操作的群集上同步运行。 这意味着，如果你的代码模式向 Delta Lake 进行写入，然后立即调用 `OPTIMIZE`，则可以在启用自动压缩的情况下删除 `OPTIMIZE` 调用。
+
+自动压缩使用与 `OPTIMIZE` 不同的试探法。 由于它在写入后同步运行，因此我们已将自动压缩功能优化为使用以下属性运行：
+
+- Azure Databricks 不支持将 Z 排序与自动压缩一起使用，因为 Z 排序的成本要远远高于纯压缩。
+- 自动压缩生成比 `OPTIMIZE` (1 GB) 更小的文件 (128 MB)。
+- 自动压缩“贪婪地”选择能够最好地利用压缩的有限的一组分区。 所选的分区数因其启动时所处的群集的大小而异。 如果群集有较多的 CPU，则可以优化较多的分区。
+- 若要控制输出文件大小，请设置 [Spark 配置](https://docs.microsoft.com/zh-cn/azure/databricks/clusters/configure#spark-config) `spark.databricks.delta.autoCompact.maxFileSize`。 默认值为 `134217728`，该值会将大小设置为 128 MB。 指定值 `104857600` 会将文件大小设置为 100 MB。
+
+**何时选择加入**
+
+- 可以接受分钟级延迟的流式处理用例
+- 当表上没有常规 `OPTIMIZE` 调用时
+
+**何时选择退出**
+
+当其他编写器可能同时执行 `DELETE`、`MERGE`、`UPDATE` 或 `OPTIMIZE` 之类的操作时（因为自动压缩可能会导致这些作业发生事务冲突）。 如果自动压缩由于事务冲突而失败，Azure Databricks 不会使压缩失败，也不会重试压缩。
+
+##### 2.3.3、示例工作流：使用并发删除或更新操作进行流式引入
+
+此工作流假定你有一个群集运行全天候流式处理作业来引入数据，另一个群集每小时、每天或临时运行一次作业来删除或更新一批记录。 对于此用例，Azure Databricks 建议你：
+
+- 使用以下命令在表级别启用优化写入
+
+  ```sql
+  ALTER TABLE <table_name|delta.`table_path`> SET TBLPROPERTIES (delta.autoOptimize.optimizeWrite = true)
+  ```
+
+  这可以确保流写入的文件数以及删除和更新作业的大小是最佳的。
+
+- 对执行删除或更新操作的作业使用以下设置将在会话级别启用自动压缩。
+
+  ```scala
+  spark.sql("set spark.databricks.delta.autoCompact.enabled = true")
+  ```
+
+  这样就可以在表中压缩文件。 由于这发生在删除或更新之后，因此可以减轻事务冲突的风险。
+
+
+
+### 3、通过缓存优化性能
+
+> [通过缓存优化性能 - Azure Databricks - Workspace | Microsoft Docs](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/delta-cache)
+
+> 增量缓存通过使用快速中间数据格式在节点的本地存储中创建远程文件的副本来加快数据读取。 必须从远程位置提取文件时，会自动缓存数据。 然后在本地连续读取上述数据，这会显著提高读取速度。
+>
+> 增量缓存适用于所有 Parquet 文件，并且不限于 [Delta Lake 格式的文件](https://docs.microsoft.com/zh-cn/azure/databricks/delta/delta-faq)。 增量缓存支持读取 DBFS、HDFS、Azure Blob 存储、Azure Data Lake Storage Gen1 和 Azure Data Lake Storage Gen2 中的 Parquet 文件。 它不支持其他存储格式，例如 CSV、JSON 和 ORC。
+>
+> 相关章节内容：
+>
+> 1. [增量缓存和 Apache Spark 缓存](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/delta-cache#delta-and-apache-spark-caching)
+> 2. [增量缓存一致性](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/delta-cache#delta-cache-consistency)
+> 3. [使用增量缓存](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/delta-cache#use-delta-caching)
+> 4. [缓存数据的子集](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/delta-cache#cache-a-subset-of-the-data)
+> 5. [监视增量缓存](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/delta-cache#monitor-the-delta-cache)
+> 6. [配置增量缓存](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/delta-cache#configure-the-delta-cache)
+
+下表总结了增量缓存和 Apache Spark 缓存之间的主要区别，以便选择最适合工作流的工具：
+
+| 功能     | 增量缓存                                               | Apache Spark 缓存                                |
+| :------- | :----------------------------------------------------- | :----------------------------------------------- |
+| 存储格式 | 工作器节点上的本地文件。                               | 内存中块，但取决于存储级别。                     |
+| 适用对象 | WASB 和其他文件系统上存储的任何 Parquet 表格。         | 任何 DataFrame 或 RDD。                          |
+| 触发     | 自动执行，第一次读取时（如果启用了缓存）。             | 手动执行，需要更改代码。                         |
+| 已评估   | 惰性。                                                 | 惰性。                                           |
+| 强制缓存 | `CACHE` 和 `SELECT`                                    | `.cache` + 任何实现缓存的操作和 `.persist`。     |
+| 可用性   | 可以使用配置标志启用或禁用，可以在某些节点类型上禁用。 | 始终可用。                                       |
+| 逐出     | 更改任何文件时自动执行，重启群集时手动执行。           | 以 LRU 方式自动执行，使用 `unpersist` 手动执行。 |
+
+### 4、动态文件修剪
+
+> 动态文件修剪 (DFP) 可以显著提高 Delta 表上许多查询的性能。 DFP 对于非分区表或非分区列上的联接特别有效。 DFP 的性能影响通常与数据聚类相关，因此请考虑使用 [Z 排序](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/file-mgmt#delta-zorder)以最大限度地提高 DFP 的效益。
+>
+> 有关 DFP 的背景和用例，请参阅[通过动态文件修剪在 Delta Lake 上更快进行 SQL 查询](https://databricks.com/blog/2020/04/30/faster-sql-queries-on-delta-lake-with-dynamic-file-pruning.html)。
+
+### 5、隔离级别
+
+> 表的隔离级别定义了必须将某事务与并发事务所作修改进行隔离的程度。 Azure Databricks 上的 Delta Lake 支持两个隔离级别：Serializable 和 WriteSerializable。
+>
+> - **Serializable**：最强隔离级别。 它可确保提交的写入操作和所有读取均[可序列化](https://en.wikipedia.org/wiki/Serializability)。 只要有一个串行序列一次执行一项操作，且生成与表中所示相同的结果，则可执行这些操作。 对于写入操作，串行序列与表的历史记录中所示完全相同。
+>
+> - **WriteSerializable（默认）** ：强度比 Serializable 低的隔离级别。 它仅确保写入操作（而非读取）可序列化。 但是，这仍比[快照](https://en.wikipedia.org/wiki/Snapshot_isolation)隔离更安全。 WriteSerializable 是默认的隔离级别，因为对大多数常见操作而言，它使数据一致性和可用性之间达到良好的平衡。
+>
+>   在此模式下，Delta 表的内容可能与表历史记录中所示的操作序列不同。 这是因为此模式允许某些并发写入对（例如操作 X 和 Y）继续执行，这样的话，即使历史记录显示在 X 之后提交了 Y，结果也像在 X 之前执行 Y 一样（即它们之间是可序列化的）。若要禁止这种重新排序，请将[表隔离级别设置](https://docs.microsoft.com/zh-cn/azure/databricks/delta/optimizations/isolation-level#setting-isolation-level)为 Serializable，以使这些事务失败。
+>
+> 读取操作始终使用快照隔离。 写入隔离级别确定读取者是否有可能看到某个“从未存在”（根据历史记录）的表的快照。
+>
+> 对于 Serializable 级别，读取者始终只会看到符合历史记录的表。 对于 WriteSerializable 级别，读取者可能会看到在增量日志中不存在的表。
+>
+> 例如，请考虑 txn1（长期删除）和 txn2（它插入 txn1 删除的数据）。 txn2 和 txn1 完成，并且它们会按照该顺序记录在历史记录中。 根据历史记录，在 txn2 中插入的数据在表中不应该存在。 对于 Serializable 级别，读取者将永远看不到由 txn2 插入的数据。 但是，对于 WriteSerializable 级别，读取者可能会在某个时间点看到由 txn2 插入的数据。
+>
+> 若要详细了解哪些类型的操作可能会在每个隔离级别彼此冲突以及可能出现的错误，请参阅[并发控制](https://docs.microsoft.com/zh-cn/azure/databricks/delta/concurrency-control)。
+>
+> ```sql 
+> - 设置隔离级别
+> 
+> 使用 `ALTER TABLE` 命令设置隔离级别。
+> ALTER TABLE <table-name> SET TBLPROPERTIES ('delta.isolationLevel' = <level-name>)
+> 
+> 其中，`<level-name>` 是 `Serializable` 或 `WriteSerializable`。
+> 
+> 例如，若要将隔离级别从默认的 `WriteSerializable` 更改为 `Serializable`，请运行：
+> ALTER TABLE <table-name> SET TBLPROPERTIES ('delta.isolationLevel' = 'Serializable')
+> 
+> ```
+
+### 6、Bloom筛选器索引
+
+> [Bloom 筛选器](https://en.wikipedia.org/wiki/Bloom_filter)索引是一种节省空间的数据结构，可跳过选定列中的数据（特别对于包含任意文本的字段）。 Bloom 筛选器的工作方式是：声明数据肯定不在文件中或可能在文件中，并定义误报率 (FPP) 。
+>
+> **配置：**
+>
+> 默认启用 Bloom 筛选器。 若要禁用 Bloom 筛选器，请将会话级别 `spark.databricks.io.skipping.bloomFilter.enabled` 配置设置为 `false`。
+>
+> 以下笔记本演示了定义 Bloom 筛选器索引如何加速“大海捞针式”查询。
+>
+> [Bloom filter index demo - Databricks (microsoft.com)](https://docs.microsoft.com/zh-cn/azure/databricks/_static/notebooks/delta/bloom-filter-index-demo.html)
+
+### 7、优化联接性能
+
+Azure Databricks 上的 Delta Lake 优化了范围和倾斜联接。 范围联接优化要求基于查询模式进行优化，倾斜联接可以通过倾斜提示提高效率。 请参阅以下文章，了解如何对这些联接优化进行最佳利用：
+
+[优化联接性能 - Azure Databricks - Workspace | Microsoft Docs](https://docs.microsoft.com/zh-cn/azure/databricks/delta/join-performance/)
+
+### 8、优化的数据转换
+
+Azure Databricks 使用嵌套类型优化高阶函数和数据帧操作的性能。
+
+> - [高阶函数](https://docs.microsoft.com/zh-cn/azure/databricks/delta/data-transformation/higher-order-lambda-functions)
+>
+> zure Databricks 提供了专用的基元，用于处理 Apache Spark SQL 中的数组；这使得使用数组变得更容易、更简洁，并省去了通常需要的大量样板代码。 基元围绕两个函数式编程构造：高阶函数和匿名 (lambda) 函数。 这两种函数协同工作，让你能够定义在 SQL 中操作数组的函数。 高阶函数采用一个数组，实现数组的处理方式以及计算结果。 它委托 lambda 函数处理数组中的每一项。
+>
+> 高阶函数笔记本简介: [获取笔记本](https://docs.microsoft.com/zh-cn/azure/databricks/_static/notebooks/higher-order-functions.html)
+>
+> 高阶函数教程 Python 笔记本[获取笔记本](https://docs.microsoft.com/zh-cn/azure/databricks/_static/notebooks/higher-order-functions-tutorial-python.html)
+>
+> - [转换复杂数据类型](https://docs.microsoft.com/zh-cn/azure/databricks/delta/data-transformation/complex-types)
+>
+> 处理嵌套数据类型时，Azure Databricks 上的 Delta Lake 对某些现成的转换进行了优化。 以下笔记本中包含了很多示例来说明如何使用 Apache Spark SQL 中本机支持的函数在复杂数据类型和基元数据类型之间进行转换。
+>
+> 转换复杂数据类型 - Scala 笔记本[获取笔记本](https://docs.microsoft.com/zh-cn/azure/databricks/_static/notebooks/transform-complex-data-types-scala.html)
+>
+> 转换复杂数据类型 - SQL 笔记本 [获取笔记本](https://docs.microsoft.com/zh-cn/azure/databricks/_static/notebooks/transform-complex-data-types-sql.html)
+
+### 9、优化示例
+
+Databricks 上的 Delta Lake 优化 Scala 笔记  [获取笔记本](https://docs.microsoft.com/zh-cn/azure/databricks/_static/notebooks/delta/optimize-scala.html)
+
+Databricks 上的 Delta Lake 优化 SQL 笔记本 [获取笔记本](https://docs.microsoft.com/zh-cn/azure/databricks/_static/notebooks/delta/optimize-sql.html)
+
+
+
+## 四、开发人员工具和指南
+
+### 1、使用IDE
+
+Idea？
+
+### 2、使用数据库工具
+
+> datagrip连接databricks。   根据官方文档已经连接成功啦
+>
+> [DataGrip 与 Azure Databricks 的集成 - Azure Databricks - Workspace | Microsoft Docs](https://docs.microsoft.com/zh-cn/azure/databricks/dev-tools/datagrip)
 
 
 

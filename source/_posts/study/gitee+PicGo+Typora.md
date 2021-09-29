@@ -1,4 +1,6 @@
-# 解决Typroa图片上传问题
+---
+title: 解决Typroa图片上传问题
+---
 
 ## 1、创建一个Gitee仓库
 

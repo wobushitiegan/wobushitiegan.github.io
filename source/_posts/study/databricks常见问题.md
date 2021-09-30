@@ -6,7 +6,7 @@ categories: 技术栈
 
 ## 什么是 Delta Lake？
 
-[Delta Lake](https://delta.io/) 是可提高[数据湖](https://databricks.com/discover/data-lakes/introduction)可靠性的[开源存储层](https://github.com/delta-io/delta)。 Delta Lake 提供 ACID 事务和可缩放的元数据处理，并可以统一流处理和批数据处理。 Delta Lake 在现有 Data Lake 的顶层运行，与 Apache Spark API 完全兼容。
+[Delta Lake](https://delta.io/) 是可提高[Data Lake](https://databricks.com/discover/data-lakes/introduction)可靠性的[开源存储层](https://github.com/delta-io/delta)。 Delta Lake 提供 ACID 事务和可缩放的元数据处理，并可以统一流处理和批数据处理。 Delta Lake 在现有 Data Lake 的顶层运行，与 Apache Spark API 完全兼容。
 
 使用 Azure Databricks 上的 Delta Lake 可以根据工作负荷模式配置 Delta Lake，并提供优化的布局和索引来加快交互式查询速度。
 
